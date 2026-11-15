@@ -1,0 +1,11 @@
+train/
+work/
+runs/
+checkpoints/
+*.pt
+__pycache__/
+*.pyc
+logs/
+.vscode/
+README.dataset.txt
+README.roboflow.txt
