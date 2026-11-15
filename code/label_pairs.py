@@ -8,7 +8,7 @@ Keyboard labelling tool for pair_review.csv - one picture at a time, one key per
 queue:  sample = the 100-pair BLIND random sample (do this first; the engine's guess is NOT shown)
         next   = the most informative pairs for training the model (next_to_label.csv)
         all    = every neighbouring pair (priority 1 = no screw first)
-Window keys (the picture shows A in red, B in blue). Click the window first so it has the keyboard focus:
+The window has buttons for every action (and a 'low confidence' tick box), or use the keys below after clicking the window:
     a  A must come off before B  (A is on top of B / a screw holding B / a cable plugged into B)
     b  B must come off before A
     n  no direct dependency (just side by side, either order works)
@@ -101,7 +101,7 @@ def render(pair_img, header, max_w=1200, max_h=700, min_w=900):
     return img
 
 
-def frame_for(ses, rows, queue, review_dir, full):
+def frame_for(ses, rows, queue, review_dir, full, max_w=1200, max_h=700):
     """Next displayable frame (BGR) for the current pair, skipping missing pictures; None when the queue is finished."""
     import cv2
     while ses.current() is not None:
@@ -111,48 +111,91 @@ def frame_for(ses, rows, queue, review_dir, full):
         if img is None:
             print("missing image", path); ses.pos += 1; continue
         done = sum(1 for r in rows if not is_open(r))
-        return render(img, f"[{ses.pos + 1}/{len(queue)}] pair {row['pair_no']}   {row['image_id']}   (done so far: {done})")
+        return render(img, f"[{ses.pos + 1}/{len(queue)}] pair {row['pair_no']}   {row['image_id']}   (done so far: {done})", max_w=max_w, max_h=max_h)
     return None
 
 
-def run_tk(ses, rows, fields, path, queue, review_dir, scripted=None):
+def run_tk(ses, rows, fields, path, queue, review_dir, scripted=None, clicks=None, debug=False):
     import tkinter as tk
     from PIL import Image, ImageTk
-    root = tk.Tk(); root.title("label pairs - click here, then press a / b / n / u / z / f / q")
+    root = tk.Tk(); root.title("label pairs - buttons or keys: a / b / n / u / z / f / q")
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    max_w, max_h = min(1200, int(sw * 0.9)), min(700, int(sh * 0.6))          # leave room for title bar, buttons, taskbar
     panel = tk.Label(root, bd=0); panel.pack()
-    st = {"full": False, "photo": None}
+    bar = tk.Frame(root); bar.pack(fill="x")
+    msg = tk.StringVar(value="Click a button or press a key. A = red part, B = blue part.")
+    status = tk.Frame(root); status.pack(fill="x", padx=6, pady=2)
+    tk.Label(status, textvariable=msg, anchor="w", font=("Segoe UI", 10)).pack(side="left")
+    low = tk.BooleanVar(value=False)
+    tk.Checkbutton(status, text="low confidence", variable=low).pack(side="right")
+    st = {"full": False, "photo": None, "n": 0, "closing": False}
+    btns = {}
 
-    def finish(*_):
-        save(path, fields, rows); root.destroy()
+    def finish(reason):
+        if st["closing"]:
+            return
+        st["closing"] = True
+        save(path, fields, rows)
+        got = sum(1 for r in rows if (r.get("label") or "UNKNOWN").upper() not in ("", "UNKNOWN"))
+        print(f"closing ({reason}). labelled this session: {st['n']}; labelled pairs in the sheet: {got}.")
+        root.destroy()
 
     def show():
-        fr = frame_for(ses, rows, queue, review_dir, st["full"])
+        fr = frame_for(ses, rows, queue, review_dir, st["full"], max_w, max_h)
         if fr is None:
-            finish(); return
+            finish("queue finished"); return
         st["photo"] = ImageTk.PhotoImage(Image.fromarray(fr[:, :, ::-1]))
         panel.configure(image=st["photo"])
 
-    def on_key(e):
-        ch = e.char or ""
-        if e.keysym == "Escape" or ch == "q":
-            finish(); return
+    def act(ch):
+        if debug:
+            print("event:", repr(ch))
+        if ch == "q":
+            finish("q / Save&quit pressed"); return
         if ch == "f":
             st["full"] = not st["full"]; show(); return
-        if e.keysym == "BackSpace":
-            ch = "z"
-        if ses.handle(ch):
-            st["full"] = False; save(path, fields, rows); show()
+        if ch in ("a", "b", "n") and low.get():
+            ch = ch.upper()
+        row = ses.current(); pair_no = row["pair_no"] if row else "-"
+        res = ses.handle(ch)
+        if not res:
+            return
+        st["full"] = False; save(path, fields, rows)
+        if res == "labelled":
+            st["n"] += 1; text = f"pair {pair_no}: {row['label']} ({row['confidence']} confidence)"
+        elif res == "unsure":
+            text = f"pair {pair_no}: marked unsure"
+        else:
+            text = "undid the last decision"
+        msg.set(text); print(text); show()
 
-    root.bind("<Key>", on_key); root.protocol("WM_DELETE_WINDOW", finish)
+    def on_key(e):
+        if debug:
+            print("key:", e.keysym, repr(e.char))
+        if e.keysym == "Escape":
+            finish("Esc pressed"); return
+        act("z" if e.keysym == "BackSpace" else (e.char or ""))
+
+    for ch, text in (("a", "A first  (a)"), ("b", "B first  (b)"), ("n", "Side by side  (n)"), ("u", "Unsure  (u)"),
+                     ("z", "Undo  (z)"), ("f", "Whole image  (f)"), ("q", "Save && quit  (q)".replace("&&", "&"))):
+        btns[ch] = tk.Button(bar, text=text, width=14, command=lambda c=ch: act(c)); btns[ch].pack(side="left", padx=2, pady=4)
+    root.bind("<Key>", on_key); root.protocol("WM_DELETE_WINDOW", lambda: finish("window closed with the X"))
     show(); root.update()
     root.lift(); root.attributes("-topmost", True); root.after(400, lambda: root.attributes("-topmost", False)); root.focus_force()
+    print("window is open (look for 'label pairs' in the taskbar if you cannot see it).")
     if scripted is not None:                                   # test hook: feed keys as real Tk key events
         def feed(i=0):
             if i >= len(scripted):
-                root.after(150, finish); return
+                root.after(150, lambda: finish("scripted keys done")); return
             root.focus_force(); root.event_generate("<Key>", keysym=scripted[i])
             root.after(120, lambda: feed(i + 1))
         root.after(300, feed)
+    if clicks is not None:                                     # test hook: press the real buttons
+        def click(i=0):
+            if i >= len(clicks):
+                root.after(150, lambda: finish("scripted clicks done")); return
+            btns[clicks[i]].invoke(); root.after(120, lambda: click(i + 1))
+        root.after(300, click)
     root.mainloop()
 
 
@@ -197,6 +240,8 @@ def main():
     ap.add_argument("--backend", choices=["tk", "cv"], default="tk")
     ap.add_argument("--keys", help="apply this key sequence without a window")
     ap.add_argument("--gui_keys", help="(tests) open the Tk window and feed these keys as events")
+    ap.add_argument("--gui_clicks", help="(tests) open the Tk window and press these buttons")
+    ap.add_argument("--debug_keys", action="store_true", help="print every key / button event to the console")
     ap.add_argument("--selftest", action="store_true", help="open a test window and exit")
     a = ap.parse_args()
     if a.selftest:
@@ -214,17 +259,17 @@ def main():
         for ch in a.keys:
             ses.handle(ch)
         save(a.review, fields, rows); print(f"applied {len(a.keys)} keys, position {ses.pos}/{len(queue)}"); return
-    print(f"{len(queue)} pairs in queue '{a.queue}'. A window opens: click it, then press a / b / n / u / z / f / q.")
+    print(f"{len(queue)} pairs in queue '{a.queue}'. A window opens: use the buttons, or click it and press a / b / n / u / z / f / q.")
     if a.backend == "tk":
         try:
-            run_tk(ses, rows, fields, a.review, queue, a.review.parent, a.gui_keys)
+            run_tk(ses, rows, fields, a.review, queue, a.review.parent, a.gui_keys, a.gui_clicks, a.debug_keys)
         except ImportError as e:
             sys.exit(f"{e}\nTk/Pillow missing: pip install pillow  (Tk ships with python.org/conda Python), or use --backend cv")
     else:
         run_cv(ses, rows, fields, a.review, queue, a.review.parent)
     save(a.review, fields, rows)
     lab = sum(1 for r in rows if (r.get("label") or "UNKNOWN").upper() not in ("", "UNKNOWN"))
-    print(f"saved. labelled pairs in the sheet: {lab}. Next: python run_all.py --root ... --stages evaluate")
+    print(f"saved. labelled pairs in the sheet: {lab}. " + ("Next: python run_all.py --root ... --stages evaluate" if lab else "Nothing labelled yet - run it again and use the buttons."))
 
 
 if __name__ == "__main__":

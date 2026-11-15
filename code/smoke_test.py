@@ -200,6 +200,12 @@ if __name__ == "__main__":
             g = sorted(read(t / "review/pair_review.csv"), key=lambda r: (int(r["priority"]), int(r["pair_no"])))[:4]
             assert [r["label"] for r in g] == ["A_BEFORE_B", "B_BEFORE_A", "NO_DIRECT_DEPENDENCY", "A_BEFORE_B"] and g[3]["confidence"] == "low", [(r["label"], r["confidence"]) for r in g]
             shutil_copy(t / "review/pair_review.keep", t / "review/pair_review.csv")
+            out = subprocess.run(["xvfb-run", "-a", sys.executable, "label_pairs.py", "--review", str(t / "review/pair_review.csv"),
+                                  "--queue", "all", "--gui_clicks", "abnu"], cwd=HERE, capture_output=True, text=True, timeout=120)
+            assert out.returncode == 0 and "labelled this session: 3" in out.stdout, out.stdout + out.stderr
+            g = sorted(read(t / "review/pair_review.csv"), key=lambda r: (int(r["priority"]), int(r["pair_no"])))[:4]
+            assert [r["label"] for r in g[:3]] == ["A_BEFORE_B", "B_BEFORE_A", "NO_DIRECT_DEPENDENCY"] and g[3]["notes"].startswith("reviewed-unsure")
+            shutil_copy(t / "review/pair_review.keep", t / "review/pair_review.csv")
             print("Tk window test (xvfb): OK")
         # ---- label every adjacent pair with the hidden truth, then validate the rules --------------
         ver = [dict(r, label=truth(r["class_a"], r["class_b"]), evidence_type="synthetic", confidence="high") for r in rv]
