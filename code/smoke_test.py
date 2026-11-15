@@ -46,15 +46,6 @@ def unit_tests():
     assert stage_edge(st, "Cable", "Connector", 1, 8) is None and stage_edge(st, "Screw", "Nope", 1, 8) is None     # equal / unknown stage -> no edge
     rule = [{"rule_id": "P1", "before_class": "Battery", "after_class": "Screw", "max_gap_px": 20.0, "confidence": 0.9}]
     assert predict_rules(rule, st, "Screw", "Battery", 5, 8) == ("BA", "P1")                                          # explicit pair rule beats the stage order
-    import label_pairs as lp
-    class FakeCV:
-        WND_PROP_VISIBLE = 4
-        def __init__(self, keys, vis): self.keys, self.vis = list(keys), list(vis)
-        def waitKey(self, ms): return self.keys.pop(0)
-        def getWindowProperty(self, w, p): return self.vis.pop(0)
-    assert lp.wait_for_key(FakeCV([-1, -1, -1], [0, 1, 0]), "w", {"seen": False}) is None          # closed only after it was seen visible
-    assert lp.wait_for_key(FakeCV([-1, -1, 97], [0, 0, 0]), "w", {"seen": False}) == 97            # visibility 0 at start is NOT 'closed'
-    assert lp.wait_for_key(FakeCV([-1] * 6 + [98], [-1] * 7), "w", {"seen": False}) == 98          # backend that never reports visibility
     print("unit tests: OK")
 
 
@@ -196,6 +187,20 @@ if __name__ == "__main__":
         sm = read(t / "prec0/eval_sample.csv")[0]["pair_no"]
         assert next(r for r in read(t / "review/pair_review.csv") if r["pair_no"] == sm)["label"] == "B_BEFORE_A"
         shutil_copy(t / "review/pair_review.keep", t / "review/pair_review.csv")     # restore the clean sheet for the next steps
+        import shutil as _sh
+        try:
+            import tkinter  # noqa
+            have_tk = True
+        except ImportError:
+            have_tk = False
+        if have_tk and _sh.which("xvfb-run"):                                        # real Tk window under a virtual display (Linux CI)
+            out = subprocess.run(["xvfb-run", "-a", sys.executable, "label_pairs.py", "--review", str(t / "review/pair_review.csv"),
+                                  "--queue", "all", "--gui_keys", "abnA"], cwd=HERE, capture_output=True, text=True, timeout=120)
+            assert out.returncode == 0, out.stdout + out.stderr
+            g = sorted(read(t / "review/pair_review.csv"), key=lambda r: (int(r["priority"]), int(r["pair_no"])))[:4]
+            assert [r["label"] for r in g] == ["A_BEFORE_B", "B_BEFORE_A", "NO_DIRECT_DEPENDENCY", "A_BEFORE_B"] and g[3]["confidence"] == "low", [(r["label"], r["confidence"]) for r in g]
+            shutil_copy(t / "review/pair_review.keep", t / "review/pair_review.csv")
+            print("Tk window test (xvfb): OK")
         # ---- label every adjacent pair with the hidden truth, then validate the rules --------------
         ver = [dict(r, label=truth(r["class_a"], r["class_b"]), evidence_type="synthetic", confidence="high") for r in rv]
         with open(t / "review/pair_review.csv", "w", newline="") as f:
