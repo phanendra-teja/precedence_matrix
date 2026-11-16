@@ -11,13 +11,32 @@ Reports coverage, precision (when a rule fires), directional recall, precision p
 pair_suggestions.csv, and quote THAT precision (it is not biased by you agreeing with the engine).
 --calibrate writes class_precedence.calibrated.csv (pair rules only) with measured support/confidence.
 """
-import argparse, csv, json
+import argparse, csv, json, math
 from collections import Counter, defaultdict
 from pathlib import Path
 from common import short_label
 from s7_precedence import load_rules, load_stages, predict_rules, read_csv, VALID
 
 TO_LAB = {"AB": "A_BEFORE_B", "BA": "B_BEFORE_A"}
+
+
+def wilson(k, n, z=1.96):
+    """95% Wilson score interval for a proportion k/n (honest uncertainty for small samples)."""
+    if n == 0:
+        return None
+    p = k / n; d = 1 + z * z / n; c = p + z * z / (2 * n); h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return [round((c - h) / d, 3), round((c + h) / d, 3)]
+
+
+def degenerate_warning(labels, min_n=10, share=0.9):
+    """Warn when (almost) every label is the same - a sign of clicking through rather than judging each pair."""
+    from collections import Counter as C
+    c = C(labels)
+    if len(labels) >= min_n and c and max(c.values()) / len(labels) >= share:
+        top, k = c.most_common(1)[0]
+        return (f"{k} of {len(labels)} labels are '{top}'. Real judgements normally mix A-first, B-first and side-by-side "
+                f"(A is just the upper part in the picture). Check each pair before trusting any number below.")
+    return ""
 
 
 def metrics(rows, weighted=False):
@@ -33,8 +52,10 @@ def metrics(rows, weighted=False):
         per[r["src"]]["fired"] += 1; per[r["src"]]["correct"] += r["pred"] == r["label"]
         per[r["src"]]["opposite_direction"] += r["label"] in ("A_BEFORE_B", "B_BEFORE_A") and r["pred"] != r["label"]
         per[r["src"]]["actually_no_dependency"] += r["label"] == "NO_DIRECT_DEPENDENCY"
-    return {"labelled_pairs": len(rows), "rule_fired_on": len(fired), "coverage": round(W(fired) / n, 3) if n else None,
+    return {"labelled_pairs": len(rows), "label_distribution": dict(Counter(r["label"] for r in rows)),
+            "rule_fired_on": len(fired), "coverage": round(W(fired) / n, 3) if n else None,
             "precision_when_fired": round(W(correct) / W(fired), 3) if fired else None,
+            "precision_95pct_interval_unweighted": wilson(len(correct), len(fired)),
             "directional_labels": len(directional), "directional_recall": round(W(hit) / W(directional), 3) if directional else None,
             "per_rule": {k: {**dict(v), "precision": round(v["correct"] / v["fired"], 3)} for k, v in per.items()}}
 
@@ -77,7 +98,11 @@ def main():
         w = csv.writer(f); w.writerow(["image_id", "instance_a", "instance_b", "class_a", "class_b", "gap_px", "your_label", "rule_prediction", "rule", "in_blind_sample"])
         for r in rows:
             w.writerow([r["image_id"], r["a"], r["b"], r["ca"], r["cb"], r["gap"], r["label"], r["pred"], r["src"], int(r["in_sample"])])
-    report = {"all_labelled_pairs": metrics(rows)}
+    warn = degenerate_warning([r["label"] for r in rows])
+    report = {"WARNING_labels": warn} if warn else {}
+    report["all_labelled_pairs"] = metrics(rows)
+    if warn:
+        print("\n" + "!" * 78 + "\nWARNING: " + warn + "\n" + "!" * 78 + "\n")
     blind = [r for r in rows if r["in_sample"]]
     if a.sample:
         if blind:

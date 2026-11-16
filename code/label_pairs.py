@@ -80,6 +80,11 @@ class Session:
         return None
 
 
+def label_warning(rows):
+    from s9_evaluate import degenerate_warning
+    return degenerate_warning([r["label"] for r in rows if (r.get("label") or "UNKNOWN").upper() not in ("", "UNKNOWN")])
+
+
 def save(path, fields, rows):
     tmp = Path(str(path) + ".tmp")
     with open(tmp, "w", newline="", encoding="utf-8") as f:
@@ -138,6 +143,9 @@ def run_tk(ses, rows, fields, path, queue, review_dir, scripted=None, clicks=Non
         save(path, fields, rows)
         got = sum(1 for r in rows if (r.get("label") or "UNKNOWN").upper() not in ("", "UNKNOWN"))
         print(f"closing ({reason}). labelled this session: {st['n']}; labelled pairs in the sheet: {got}.")
+        w = label_warning(rows)
+        if w:
+            print("WARNING: " + w)
         root.destroy()
 
     def show():

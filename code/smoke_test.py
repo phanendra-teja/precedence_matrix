@@ -46,6 +46,10 @@ def unit_tests():
     assert stage_edge(st, "Cable", "Connector", 1, 8) is None and stage_edge(st, "Screw", "Nope", 1, 8) is None     # equal / unknown stage -> no edge
     rule = [{"rule_id": "P1", "before_class": "Battery", "after_class": "Screw", "max_gap_px": 20.0, "confidence": 0.9}]
     assert predict_rules(rule, st, "Screw", "Battery", 5, 8) == ("BA", "P1")                                          # explicit pair rule beats the stage order
+    from s9_evaluate import wilson, degenerate_warning
+    assert wilson(10, 20) == [0.299, 0.701] and wilson(0, 0) is None
+    assert degenerate_warning(["A_BEFORE_B"] * 20) and not degenerate_warning(["A_BEFORE_B"] * 6 + ["B_BEFORE_A"] * 5 + ["NO_DIRECT_DEPENDENCY"] * 4)
+    assert not degenerate_warning(["A_BEFORE_B"] * 5)                     # too few labels to judge
     print("unit tests: OK")
 
 
@@ -219,6 +223,14 @@ if __name__ == "__main__":
         assert blind["labelled"] == 100 and blind["unweighted"]["precision_when_fired"] == 1.0 and blind["frequency_weighted"]["precision_when_fired"] == 1.0, blind
         assert all(float(r["weight"]) >= 1.0 for r in read(t / "prec0/eval_sample.csv"))
         assert (t / "eval/rule_evaluation_by_classpair.csv").exists()
+        # all-the-same labels must trigger the warning (clicking through)
+        allA = [dict(r, label="A_BEFORE_B") for r in rv]
+        with open(t / "review/allA.csv", "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(allA[0])); w.writeheader(); w.writerows(allA)
+        o = run("s9_evaluate.py", "--instances", t / "inst/instances.csv", "--verified", t / "review/allA.csv", "--rules", rules,
+                "--stages_csv", t / "stages.csv", "--sample", t / "prec0/eval_sample.csv", "--out", t / "eval_allA")
+        assert "WARNING" in o and "WARNING_labels" in json.load(open(t / "eval_allA/rule_evaluation.json"))
+        assert "precision_95pct_interval_unweighted" in ev["all_labelled_pairs"]
         # ---- stage 8: learn from verified pairs (group CV) -----------------------------------------
         run("s8_train_model.py", "--instances", t / "inst/instances.csv", "--verified", t / "review/pair_review.csv", "--out", t / "model.joblib")
         rep = json.load(open(t / "model.report.json"))

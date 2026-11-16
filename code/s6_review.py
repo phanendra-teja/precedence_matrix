@@ -150,7 +150,7 @@ def main():
     parts = a.out / "part_groups.csv"
     if parts.exists() and a.regroup:
         parts.replace(a.out / "part_groups.bak.csv")
-    merged = 0
+    merged, created = 0, not parts.exists()
     if not parts.exists():                    # one row per instance; edit part_id to merge fragments of one physical part
         merge = {c.strip().lower() for c in a.merge_classes.split(",") if c.strip()}
         with open(parts, "w", newline="", encoding="utf-8") as f:
@@ -166,7 +166,8 @@ def main():
                     w.writerow([key, r["instance_id"], r["class_name"], pid])
     print(f"{len(by_img)} annotated overlays -> {a.out/'overlays_ids'}; {len(out_rows)} pair images -> {a.out/'pairs'}")
     print(f"Fill labels in {target} (pair image path is in review_image; priority 1 = no screw, 2 = involves a screw).")
-    print(f"part_groups.csv: {merged} instances auto-merged ({a.merge_classes}); check it, and merge other split parts by giving them the same part_id.")
+    print((f"part_groups.csv: {merged} instances auto-merged ({a.merge_classes}); check it, and merge other split parts by giving them the same part_id."
+           if created else "part_groups.csv kept as it was (your merges are safe; add --regroup to rebuild it)."))
 
 
 if __name__ == "__main__":
